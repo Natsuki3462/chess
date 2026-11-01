@@ -58,13 +58,32 @@ class Session(QObject):
     def legal_from(self, square: int) -> list[chess.Move]:
         return [m for m in self.board.legal_moves if m.from_square == square]
 
-    def find_move(self, from_sq: int, to_sq: int) -> chess.Move | None:
+    def promotion_moves(self, from_sq: int, to_sq: int) -> list[chess.Move]:
+        moves = [
+            m for m in self.board.legal_moves
+            if m.from_square == from_sq and m.to_square == to_sq and m.promotion
+        ]
+        if not moves:
+            return []
+        order = {p: i for i, p in enumerate(
+            (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
+        )}
+        return sorted(moves, key=lambda m: order.get(m.promotion, 9))
+
+    def find_move(
+        self, from_sq: int, to_sq: int, promotion: int | None = None
+    ) -> chess.Move | None:
 
         candidates = [
             m for m in self.board.legal_moves
             if m.from_square == from_sq and m.to_square == to_sq
         ]
         if not candidates:
+            return None
+        if promotion is not None:
+            for m in candidates:
+                if m.promotion == promotion:
+                    return m
             return None
         for m in candidates:
             if m.promotion == chess.QUEEN:

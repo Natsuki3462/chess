@@ -25,6 +25,7 @@ class BoardView(QWidget):
     movePlayed = pyqtSignal(object)
     illegalMove = pyqtSignal(str)
     selectionChanged = pyqtSignal()
+    promotionRequested = pyqtSignal(int, int)
 
     def __init__(self, session: Session, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -353,6 +354,19 @@ class BoardView(QWidget):
             return f"现在轮到{self.session.turn_name}走，{side}棋子暂时不能动"
         return "这枚棋子现在没有可走的着法"
 
+    def _try_move(self, from_sq: int, to_sq: int) -> bool:
+        if self.session.promotion_moves(from_sq, to_sq):
+            self._selected = None
+            self.selectionChanged.emit()
+            self.update()
+            self.promotionRequested.emit(from_sq, to_sq)
+            return True
+        move = self.session.find_move(from_sq, to_sq)
+        if move is None:
+            return False
+        self._commit(move)
+        return True
+
     def _commit(self, move: chess.Move) -> None:
         self._selected = None
         self.selectionChanged.emit()
@@ -371,9 +385,7 @@ class BoardView(QWidget):
         piece = board.piece_at(square)
 
         if self._selected is not None and square != self._selected:
-            move = self.session.find_move(self._selected, square)
-            if move is not None:
-                self._commit(move)
+            if self._try_move(self._selected, square):
                 return
             if piece is not None and self.session.legal_from(square):
                 self._select(square)
@@ -449,9 +461,7 @@ class BoardView(QWidget):
             target = self.square_at(event.position())
             origin = self._selected
             if target is not None and origin is not None and target != origin:
-                move = self.session.find_move(origin, target)
-                if move is not None:
-                    self._commit(move)
+                if self._try_move(origin, target):
                     return
 
             self.update()

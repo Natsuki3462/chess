@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import chess
-from PyQt6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 import config
+import pieces
 import theme
 from board_view import BoardView
 from engine_worker import AnalysisResult, EngineWorker
@@ -41,6 +42,7 @@ HEADER_HEIGHT = 38
 HEADER_HEIGHT_COMPACT = 26
 GRIP_SIZE = 14
 AUTO_ACCEPT_DELAY_MS = 320
+WINRATE_EMA_ALPHA = 0.35
 
 class CardHeader(QWidget):
     def __init__(self, window: "FloatWindow") -> None:
@@ -51,18 +53,26 @@ class CardHeader(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 0, 8, 0)
-        row.setSpacing(8)
+        row.setContentsMargins(10, 0, 6, 0)
+        row.setSpacing(6)
 
         self.title = QLabel("ChessFloat")
         self.title.setObjectName("Title")
         self.status = QLabel("")
         self.status.setObjectName("Status")
         self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.win = QLabel("—")
+        self.win.setObjectName("Win")
+        self.win.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.win.setFixedWidth(36)
+        self.win.setToolTip(
+            "当前胜率（期望得分 = 胜 + 和/2，取你执的一方视角）\n"
+            "数值做了指数平滑，避免逐层评估跳动"
+        )
         self.eval = QLabel("—")
         self.eval.setObjectName("Eval")
         self.eval.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.eval.setFixedWidth(52)
+        self.eval.setFixedWidth(44)
 
         self.btn_auto = self._tool(
             "A",
@@ -78,6 +88,7 @@ class CardHeader(QWidget):
 
         row.addWidget(self.title)
         row.addWidget(self.status, 1)
+        row.addWidget(self.win)
         row.addWidget(self.eval)
         row.addWidget(self.btn_auto)
         row.addWidget(self.btn_pin)
@@ -101,8 +112,12 @@ class CardHeader(QWidget):
     def set_eval(self, text: str) -> None:
         self.eval.setText(text)
 
+    def set_winrate(self, text: str) -> None:
+        self.win.setText(text)
+
     def set_compact(self, compact: bool) -> None:
         self.title.setVisible(not compact)
+        self.win.setVisible(not compact)
         self.eval.setVisible(not compact)
         self.btn_auto.setVisible(not compact)
         self.btn_pin.setVisible(not compact)
@@ -540,6 +555,89 @@ class ResizeGrip(QWidget):
                 self.width() - 2, int(self.height() - offset),
             )
 
+class PromotionPicker(QWidget):
+
+    picked = pyqtSignal(int)
+
+    CELL = 42
+    PAD = 7
+    ORDER = (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
+
+    def __init__(self, parent: QWidget, is_white: bool) -> None:
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.is_white = is_white
+        self._hover = -1
+        self._picked = False
+        self.setFixedSize(self.CELL * 4 + self.PAD * 2, self.CELL + self.PAD * 2)
+        self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setToolTip("选择升变棋子")
+
+    def _cell_rect(self, index: int) -> QRectF:
+        return QRectF(self.PAD + index * self.CELL, self.PAD, self.CELL, self.CELL)
+
+    def _index_at(self, pos) -> int:
+        for index in range(4):
+            if self._cell_rect(index).contains(pos):
+                return index
+        return -1
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(theme.CARD_BORDER, 1))
+        painter.setBrush(QColor(18, 20, 26, 246))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+
+        fill = theme.PIECE_WHITE_FILL if self.is_white else theme.PIECE_BLACK_FILL
+        edge = theme.PIECE_WHITE_EDGE if self.is_white else theme.PIECE_BLACK_EDGE
+        for index, piece_type in enumerate(self.ORDER):
+            rect = self._cell_rect(index)
+            if index == self._hover:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(74, 222, 128, 46))
+                painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 7, 7)
+            pieces.draw_piece(
+                painter,
+                rect.adjusted(5, 5, -5, -5),
+                piece_type,
+                self.is_white,
+                fill,
+                edge,
+            )
+
+    def mouseMoveEvent(self, event) -> None:
+        index = self._index_at(event.position())
+        if index != self._hover:
+            self._hover = index
+            self.update()
+
+    def leaveEvent(self, event) -> None:
+        if self._hover != -1:
+            self._hover = -1
+            self.update()
+
+    def mousePressEvent(self, event) -> None:
+        index = self._index_at(event.position())
+        if index < 0:
+            return
+        self._picked = True
+        self.picked.emit(self.ORDER[index])
+        self.close()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        if self._picked:
+            return
+        parent = self.parent()
+        if parent is None or not parent.isVisible():
+            return
+        QTimer.singleShot(0, self._reopen)
+
+    def _reopen(self) -> None:
+        if not self._picked and not self.isVisible():
+            self.show()
+
 class FloatWindow(QWidget):
     def __init__(self, cfg: dict) -> None:
         super().__init__(None)
@@ -564,6 +662,7 @@ class FloatWindow(QWidget):
         self._suggestion: AnalysisResult | None = None
         self._last_cp: int | None = None
         self._last_eval_delta: float | None = None
+        self._win_ema: float | None = None
         self._side_chosen = False
         self._thinking = False
         self._status_override: str | None = None
@@ -573,6 +672,7 @@ class FloatWindow(QWidget):
 
         self.header = CardHeader(self)
         self.board = BoardView(self.session, self)
+        self._promotion_picker: PromotionPicker | None = None
         self.board.show_coords = bool(cfg.get("show_coords", True))
         self.footer = CardFooter(self)
         self.history = HistoryStrip(self)
@@ -614,6 +714,7 @@ class FloatWindow(QWidget):
         self.board.movePlayed.connect(self._play_move)
         self.board.illegalMove.connect(lambda text: self._flash_status(text, warn=True))
         self.board.selectionChanged.connect(self._refresh_ui)
+        self.board.promotionRequested.connect(self._on_promotion_requested)
 
         self.header.btn_auto.toggled.connect(self._set_auto_accept)
         self.header.btn_pin.toggled.connect(self._set_always_on_top)
@@ -693,6 +794,7 @@ class FloatWindow(QWidget):
         if data.get("version") != self.session.version:
             return
         self.header.set_eval(self.session.eval_text(data.get("cp"), data.get("mate")))
+        self._apply_winrate(data.get("wdl"))
         if self._thinking and self._status_override is None:
             depth = data.get("depth") or 0
             self._set_status_quiet(f"分析中 · 深度 {depth}")
@@ -721,6 +823,7 @@ class FloatWindow(QWidget):
         self._suggestion = result
         self.board.set_suggestion(move, stale=False)
         self.header.set_eval(self.session.eval_text(result.cp, result.mate))
+        self._apply_winrate(result.wdl)
         self._track_eval(result)
         self._refresh_ui()
 
@@ -730,6 +833,23 @@ class FloatWindow(QWidget):
                 AUTO_ACCEPT_DELAY_MS,
                 lambda: self._auto_accept(version, move, result.san),
             )
+
+    def _apply_winrate(self, wdl: tuple[int, int, int] | None) -> None:
+
+        if wdl is None:
+            self.header.set_winrate("—")
+            return
+        wins, draws, losses = wdl
+        if self.session.my_color == chess.BLACK:
+            wins, losses = losses, wins
+        raw = (wins + draws / 2.0) / 10.0
+        if self._win_ema is None:
+            self._win_ema = raw
+        else:
+            self._win_ema = (
+                WINRATE_EMA_ALPHA * raw + (1.0 - WINRATE_EMA_ALPHA) * self._win_ema
+            )
+        self.header.set_winrate(f"{self._win_ema:.0f}%")
 
     def _track_eval(self, result: AnalysisResult) -> None:
 
@@ -813,6 +933,59 @@ class FloatWindow(QWidget):
             factor += 0.40
         return max(0.4, min(2.5, factor))
 
+    def _on_promotion_requested(self, from_sq: int, to_sq: int) -> None:
+        piece = self.session.board.piece_at(from_sq)
+        if piece is None:
+            return
+        if self._promotion_picker is not None:
+            self._promotion_picker.close()
+
+        picker = PromotionPicker(self, piece.color == chess.WHITE)
+        self._promotion_picker = picker
+
+        def apply(promotion: int) -> None:
+            move = self.session.find_move(from_sq, to_sq, promotion)
+            if move is not None:
+                self._play_move(move)
+
+        picker.picked.connect(apply)
+
+        cell = self.board.square_rect(to_sq)
+        origin = self.board.square_rect(from_sq)
+        w, h = picker.width(), picker.height()
+        area = QRectF(self.board.rect())
+
+        if origin.center().y() > cell.center().y():
+            spots = [
+                QPointF(cell.center().x() - w / 2, cell.top() - 6 - h),
+                QPointF(cell.right() + 6, cell.center().y() - h / 2),
+                QPointF(cell.left() - 6 - w, cell.center().y() - h / 2),
+            ]
+        else:
+            spots = [
+                QPointF(cell.center().x() - w / 2, cell.bottom() + 6),
+                QPointF(cell.right() + 6, cell.center().y() - h / 2),
+                QPointF(cell.left() - 6 - w, cell.center().y() - h / 2),
+            ]
+
+        spot = spots[0]
+        for candidate in spots:
+            if area.contains(QRectF(candidate.x(), candidate.y(), w, h)):
+                spot = candidate
+                break
+
+        anchor = self.board.mapToGlobal(spot.toPoint())
+        x, y = anchor.x(), anchor.y()
+
+        screen = QGuiApplication.screenAt(anchor)
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = max(avail.left(), min(x, avail.right() - w))
+            y = max(avail.top(), min(y, avail.bottom() - h))
+
+        picker.move(x, y)
+        picker.show()
+
     def _play_move(self, move: chess.Move) -> bool:
         if not self.session.push(move):
             self._flash_status("非法着法", warn=True)
@@ -880,6 +1053,8 @@ class FloatWindow(QWidget):
         self._suggestion = None
         self._last_cp = None
         self._last_eval_delta = None
+        self._win_ema = None
+        self.header.set_winrate("—")
         self.board.set_suggestion(None)
         self.session.reset(self.session.my_color)
         self.overlay.show()
@@ -889,6 +1064,7 @@ class FloatWindow(QWidget):
     def choose_side(self, is_white: bool) -> None:
         self.overlay.hide()
         self._side_chosen = True
+        self._win_ema = None
         color = chess.WHITE if is_white else chess.BLACK
         self.session.my_color = color
         self.session.flipped = not is_white
@@ -899,6 +1075,7 @@ class FloatWindow(QWidget):
         prev = self.board.suggestion_move
         self._suggestion = None
         self._thinking = False
+        self._win_ema = None
         if self._engine is not None:
             self._engine.cancel()
 
@@ -932,6 +1109,11 @@ class FloatWindow(QWidget):
             text = "对局结束"
             if outcome is not None and outcome.winner is not None:
                 text = "白胜" if outcome.winner == chess.WHITE else "黑胜"
+                self.header.set_winrate(
+                    "100%" if outcome.winner == self.session.my_color else "0%"
+                )
+            else:
+                self.header.set_winrate("50%")
             self._set_status_quiet(text)
             return
 
@@ -941,12 +1123,14 @@ class FloatWindow(QWidget):
             else:
                 self.header.set_status("请选择先后手")
             self.header.set_eval("—")
+            self.header.set_winrate("—")
             return
 
         if self._engine_error:
 
             self.header.set_status(self._engine_error, warn=True)
             self.header.set_eval("—")
+            self.header.set_winrate("—")
             return
 
         if self._status_override:
@@ -1081,6 +1265,10 @@ class FloatWindow(QWidget):
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(self.cfg, self)
+
+        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dialog.raise_()
+        dialog.activateWindow()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values()

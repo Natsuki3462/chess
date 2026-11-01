@@ -56,6 +56,8 @@ QToolButton:disabled { color: #5c6474; }
 
 QLabel#Title { color: #eef2f8; font-size: 12px; font-weight: 600; }
 QLabel#Status { color: #96a0b4; font-size: 11px; }
+QLabel#Win    { color: #eef2f8; font-size: 12px; font-weight: 600;
+                font-family: "Consolas", "Cascadia Mono", monospace; }
 QLabel#Eval   { color: #cfd6e4; font-size: 12px; font-weight: 600;
                 font-family: "Consolas", "Cascadia Mono", monospace; }
 QLabel#Warn   { color: #f87171; font-size: 11px; }
@@ -105,6 +107,25 @@ QSpinBox, QLineEdit {
     padding: 4px 6px;
     selection-background-color: rgba(74,222,128,0.35);
 }
+
+QComboBox {
+    color: #e6eaf2;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-height: 18px;
+}
+QComboBox:hover { background: rgba(255,255,255,0.12); }
+QComboBox QAbstractItemView {
+    color: #e6eaf2;
+    background: #14161c;
+    border: 1px solid rgba(255,255,255,0.16);
+    selection-background-color: rgba(74,222,128,0.28);
+    selection-color: #ffffff;
+    outline: none;
+}
+
 QCheckBox { color: #cfd6e4; }
 QDialog { background: #14161c; }
 """

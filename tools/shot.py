@@ -168,6 +168,10 @@ def main() -> int:
           f"(深度 {window._suggestion.depth if got else '-'})")
     compose(window, OUT / "03_suggestion_arrow.png")
 
+    win_text = window.header.win.text()
+    win_ok = win_text.endswith("%") and 0.0 <= float(win_text.rstrip("%")) <= 100.0
+    print(f"  [{'PASS' if win_ok else 'FAIL'}] 胜率显示（期望得分 = 胜 + 和/2）→ {win_text}")
+
     click_square(window, chess.E2)
     pump(app, 0.12)
     click_square(window, chess.E4)
@@ -293,6 +297,8 @@ def main() -> int:
     pump(app, 1.6)
     no_arrow = window.board.suggestion_move is None and window._suggestion is None
     print(f"  [{'PASS' if no_arrow else 'FAIL'}] 执黑开局不显示对方建议（无箭头、不分析）")
+    win_text = window.header.win.text()
+    print(f"  [{'PASS' if win_text == '—' else 'FAIL'}] 对手回合胜率留占位符 → {win_text}")
 
     click_square(window, chess.E1)
     pump(app, 0.15)
@@ -322,6 +328,9 @@ def main() -> int:
     print(f"  [{'PASS' if ok else 'FAIL'}] 轮到我方出绿箭头 → "
           f"{arrow.uci() if arrow else '无'} "
           f"(深度 {window._suggestion.depth if got else '-'})")
+    win_text = window.header.win.text()
+    win_ok = win_text.endswith("%") and 0.0 <= float(win_text.rstrip("%")) <= 100.0
+    print(f"  [{'PASS' if win_ok else 'FAIL'}] 执黑时胜率按黑方视角给出 → {win_text}")
     compose(window, OUT / "07_black_view.png")
 
     window.new_game()
@@ -464,6 +473,41 @@ def main() -> int:
     pump(app, 1.2)
     ok = window._engine_ok and window._engine_error is None
     print(f"  [{'PASS' if ok else 'FAIL'}] 恢复引擎后重新就绪（错误提示清除）")
+
+    print("\n== 兵升变 ==")
+    window.new_game()
+    pump(app, 0.3)
+    window.choose_side(True)
+    pump(app, 0.3)
+
+    window.session.board.set_fen("7k/4P3/8/8/8/8/8/4K3 w - - 0 1")
+    window.session.bump()
+    pump(app, 0.2)
+
+    asked = []
+    window.board.promotionRequested.connect(lambda f, t: asked.append((f, t)))
+    handled = window.board._try_move(chess.E7, chess.E8)
+    pump(app, 0.2)
+    ok = handled and asked == [(chess.E7, chess.E8)] and window.session.board.piece_at(chess.E8) is None
+    print(f"  [{'PASS' if ok else 'FAIL'}] 升变先询问、不落子（{asked}）")
+
+    picker = window._promotion_picker
+    ok = picker is not None and picker.isVisible() and len(picker.ORDER) == 4
+    print(f"  [{'PASS' if ok else 'FAIL'}] 弹出四选一面板")
+
+    picker.picked.emit(chess.KNIGHT)
+    pump(app, 0.3)
+    piece = window.session.board.piece_at(chess.E8)
+    ok = piece is not None and piece.piece_type == chess.KNIGHT and piece.color == chess.WHITE
+    print(f"  [{'PASS' if ok else 'FAIL'}] 选马后 e8 上确实是马")
+
+    window.session.board.set_fen("7k/4P3/8/8/8/8/8/4K3 w - - 0 1")
+    window.session.bump()
+    pump(app, 0.2)
+    asked.clear()
+    handled = window.board._try_move(chess.E1, chess.E2)
+    ok = handled and not asked and window.session.board.piece_at(chess.E2) is not None
+    print(f"  [{'PASS' if ok else 'FAIL'}] 普通走子不弹升变")
 
     window.close()
     pump(app, 0.5)

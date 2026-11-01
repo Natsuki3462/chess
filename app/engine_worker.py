@@ -21,6 +21,17 @@ class AnalysisResult:
     nodes: int = 0
     elapsed_ms: int = 0
     interrupted: bool = False
+    wdl: tuple[int, int, int] | None = None
+
+def _wdl_white(raw) -> tuple[int, int, int] | None:
+
+    if raw is None:
+        return None
+    try:
+        white = raw.pov(chess.WHITE)
+        return (white.wins, white.draws, white.losses)
+    except Exception:
+        return None
 
 class EngineWorker(QThread):
     ready = pyqtSignal(str)
@@ -75,6 +86,8 @@ class EngineWorker(QThread):
                 options["Threads"] = self.threads
             if "Hash" in self._engine.options:
                 options["Hash"] = self.hash_mb
+            if "UCI_ShowWDL" in self._engine.options:
+                options["UCI_ShowWDL"] = True
             if options:
                 self._engine.configure(options)
             self._lower_priority()
@@ -175,6 +188,7 @@ class EngineWorker(QThread):
                         result.cp = white_score.score()
                 except Exception:
                     pass
+            result.wdl = _wdl_white(best_info.get("wdl"))
             result.depth = int(best_info.get("depth") or 0)
             result.nodes = int(best_info.get("nodes") or 0)
 
@@ -203,5 +217,6 @@ class EngineWorker(QThread):
                 "depth": int(info.get("depth") or 0),
                 "cp": cp,
                 "mate": mate,
+                "wdl": _wdl_white(info.get("wdl")),
             }
         )
