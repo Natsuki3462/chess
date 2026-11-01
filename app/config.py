@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Optional
@@ -10,11 +11,17 @@ ROOT_DIR = APP_DIR.parent
 ENGINE_DIR = ROOT_DIR / "engine"
 CONFIG_PATH = ROOT_DIR / "config.json"
 
+
+def _threads_for(cap: int) -> int:
+    cores = os.cpu_count() or 2
+    return max(1, min(cap, cores))
+
+
 STRENGTH_PRESETS: dict[str, tuple[str, int, int, int]] = {
-    "economy": ("省电", 800, 2, 64),
-    "balanced": ("均衡", 2000, 4, 256),
-    "deep": ("深度", 3500, 6, 512),
-    "max": ("极限", 6000, 8, 1024),
+    "economy": ("省电", 800, _threads_for(2), 64),
+    "balanced": ("均衡", 2000, _threads_for(4), 256),
+    "deep": ("深度", 3500, _threads_for(6), 512),
+    "max": ("极限", 6000, _threads_for(8), 1024),
 }
 CUSTOM_STRENGTH = "custom"
 
@@ -82,7 +89,10 @@ def load_config() -> dict[str, Any]:
     except (OSError, ValueError):
         pass
 
-    if "strength" not in raw:
+    strength = cfg.get("strength")
+    if strength in STRENGTH_PRESETS:
+        apply_preset(cfg, strength)
+    elif "strength" not in raw:
         apply_preset(cfg, "balanced")
     return _sanitize(cfg)
 
